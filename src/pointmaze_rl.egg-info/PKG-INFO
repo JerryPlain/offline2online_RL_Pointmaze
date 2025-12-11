@@ -1,0 +1,15 @@
+Metadata-Version: 2.4
+Name: pointmaze_rl
+Version: 0.1.0
+Summary: TD3 and TD3+BC implementation for Gymnasium PointMaze
+Requires-Python: >=3.9
+Requires-Dist: gymnasium[mujoco]
+Requires-Dist: gymnasium-robotics
+Requires-Dist: torch>=2.0.0
+Requires-Dist: numpy
+Requires-Dist: tensorboard
+Requires-Dist: moviepy
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: black; extra == "dev"
+Requires-Dist: ruff; extra == "dev"

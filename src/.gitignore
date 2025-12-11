@@ -1,0 +1,2 @@
+# Ignore PPO script
+src/scripts/train_ppo.py

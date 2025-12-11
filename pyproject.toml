@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pointmaze_rl"
+version = "0.1.0"
+description = "TD3 and TD3+BC implementation for Gymnasium PointMaze"
+requires-python = ">=3.9"
+dependencies = [
+    "gymnasium[mujoco]",
+    "gymnasium-robotics",
+    "stable-baselines3[extra]",
+    "torch>=2.0.0",
+    "numpy",
+    "tensorboard",
+    "moviepy",
+    "PyYAML"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",   # Formatting
+    "ruff"     # Linting
+]

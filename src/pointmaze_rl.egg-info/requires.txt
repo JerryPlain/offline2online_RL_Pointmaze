@@ -1,0 +1,11 @@
+gymnasium[mujoco]
+gymnasium-robotics
+torch>=2.0.0
+numpy
+tensorboard
+moviepy
+
+[dev]
+pytest
+black
+ruff

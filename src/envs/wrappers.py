@@ -1,6 +1,7 @@
 import gymnasium as gym
 import numpy as np
 from gymnasium.wrappers import FlattenObservation, RecordVideo, RecordEpisodeStatistics
+import pickle
 
 class NegativeRewardWrapper(gym.RewardWrapper):
     """
@@ -57,3 +58,38 @@ class SuccessBonusWrapper(gym.Wrapper):
             info['is_success'] = True
         
         return obs, reward, term, trunc, info
+    
+
+class OfflineStatsWrapper(gym.Wrapper):
+    """
+    Normalizes observations and scales rewards using fixed statistics 
+    computed during offline training.
+    """
+    def __init__(self, env, stats_path):
+        super().__init__(env)
+        with open(stats_path, "rb") as f:
+            stats = pickle.load(f)
+            
+        self.mean = stats["mean"]
+        self.std = stats["std"]
+        self.reward_scale = stats.get("reward_scale", 1.0)
+        
+        print(f"--> Loaded Offline Stats from {stats_path}")
+        print(f"    Reward Scale: {self.reward_scale}")
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        
+        # 1. Normalize Observation
+        # (obs - mean) / std
+        obs = (obs - self.mean) / self.std
+        
+        # 2. Scale Reward
+        reward = reward * self.reward_scale
+        
+        return obs, reward, terminated, truncated, info
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        obs = (obs - self.mean) / self.std
+        return obs, info

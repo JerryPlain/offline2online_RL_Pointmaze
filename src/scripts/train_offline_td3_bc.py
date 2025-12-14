@@ -54,51 +54,89 @@ def get_device(device_cfg: str) -> torch.device:
 
 def load_dataset_to_buffer(path, state_dim, action_dim, device):
     """
-    Load expert dataset and rebuild the flattened state to match the
-    online env observation (FlattenObservation over dict obs).
-
-    Online env state structure (after FlattenObservation) is:
-        [achieved_goal(2), desired_goal(2), observation(4)] -> 8 dims
-
-    Our expert dataset stores:
-        "obs"      : observation (4,)  = [x, y, vx, vy]
-        "goal"     : desired_goal (2,)
-        "next_obs" : next observation (4,)
-
-    We reconstruct:
-        achieved_goal      = obs[:2]
-        next_achieved_goal = next_obs[:2]
-        state      = concat([achieved_goal, goal, obs])
-        next_state = concat([next_achieved_goal, goal, next_obs])
+    Loads expert dataset, reconstructs flattened states, and performs
+    Standard Normalization (Z-Score) on states and Scaling on rewards.
     """
     with open(path, "rb") as f:
         dataset = pickle.load(f)
 
     buffer = ReplayBuffer(state_dim, action_dim, device=device)
+    
+    # 1. Collect raw data into lists
+    print(f"[Data] Loading raw data from {path}...")
+    all_states, all_next_states, all_actions, all_rewards, all_dones = [], [], [], [], []
 
     for d in dataset:
-        obs      = np.array(d["obs"],      dtype=np.float32)      # (4,)
-        goal     = np.array(d["goal"],     dtype=np.float32)      # (2,)
-        next_obs = np.array(d["next_obs"], dtype=np.float32)      # (4,)
-        action   = np.array(d["action"],   dtype=np.float32)
-        reward   = float(d["reward"])
-        done     = float(d["done"])
+        obs      = np.array(d["obs"], dtype=np.float32)
+        goal     = np.array(d["goal"], dtype=np.float32)
+        next_obs = np.array(d["next_obs"], dtype=np.float32)
+        
+        # Reconstruct Flattened State: [Achieved(2), Goal(2), Obs(4)]
+        state      = np.concatenate([obs[:2], goal, obs], axis=-1)
+        next_state = np.concatenate([next_obs[:2], goal, next_obs], axis=-1)
+        
+        all_states.append(state)
+        all_next_states.append(next_state)
+        all_actions.append(np.array(d["action"], dtype=np.float32))
+        all_rewards.append(float(d["reward"]))
+        all_dones.append(float(d["done"]))
 
-        # Reconstruct achieved goals (current & next)
-        achieved      = obs[:2]           # (2,)
-        next_achieved = next_obs[:2]      # (2,)
+    # Convert to Numpy for vector math
+    np_states = np.array(all_states)
+    np_next_states = np.array(all_next_states)
+    np_rewards = np.array(all_rewards)
+    
+    # --- 2. STATE NORMALIZATION (Standard Scaler) ---
+    # Compute stats on the full dataset
+    state_mean = np_states.mean(axis=0)
+    state_std  = np_states.std(axis=0) + 1e-3  # +1e-3 prevents division by zero
+    
+    # Apply (x - mu) / sigma
+    np_states = (np_states - state_mean) / state_std
+    np_next_states = (np_next_states - state_mean) / state_std
 
-        # Flattened states to match online env
-        state      = np.concatenate([achieved, goal, obs], axis=-1)      # (8,)
-        next_state = np.concatenate([next_achieved, goal, next_obs], axis=-1)  # (8,)
+    print(f"[Data] Normalized States. Mean ~0, Std ~1.")
 
-        # Optional sanity check
-        assert state.shape[0] == state_dim, \
-            f"State dim mismatch: got {state.shape[0]}, expected {state_dim}"
+    # --- 3. REWARD SCALING ---
+    # PointMaze dense rewards are often large negative distances (e.g., -5.0 to 0.0)
+    # Neural networks prefer rewards roughly in [-1, 1] or [0, 1].
+    
+    # Heuristic: If rewards are large (absolute value > 10), scale them down.
+    # If using sparse rewards (0/1), this block does nothing.
+    r_min, r_max = np_rewards.min(), np_rewards.max()
+    scale_factor = 1.0
+    
+    print(f"r_min: {r_min}, r_max: {r_max}")
 
-        buffer.add(state, action, reward, next_state, done)
+    # Only scale if the range is weird (e.g. 0 to -100)
+    if np.abs(r_min) > 10.0 or np.abs(r_max) > 10.0:
+        scale_factor = 1.0 / max(np.abs(r_min), np.abs(r_max))
+        np_rewards = np_rewards * scale_factor
+        print(f"[Data] Scaled Rewards by {scale_factor:.4f}. New Range: [{np_rewards.min():.2f}, {np_rewards.max():.2f}]")
 
-    print("[TD3-BC Offline] Loaded transitions:", buffer.size)
+    # --- 4. Fill Buffer ---
+    for i in range(len(np_states)):
+        buffer.add(
+            np_states[i], 
+            all_actions[i], 
+            np_rewards[i], 
+            np_next_states[i], 
+            all_dones[i]
+        )
+
+    print(f"[TD3-BC Offline] Buffer filled with {buffer.size} transitions.")
+    
+    # --- CRITICAL: Save Stats for Online Usage ---
+    # You MUST save these so your online agent knows how to view the world!
+    stats = {
+        "mean": state_mean,
+        "std": state_std,
+        "reward_scale": scale_factor
+    }
+    with open("normalization_stats.pkl", "wb") as f:
+        pickle.dump(stats, f)
+    print("[Data] Saved normalization_stats.pkl (KEEP THIS FILE)")
+
     return buffer
 
 
@@ -180,22 +218,14 @@ def main():
     # -----------------------
     buffer = load_dataset_to_buffer(dataset_path, state_dim, action_dim, device)
 
-    # Some TD3-BC implementations accept alpha in the constructor;
-    # if not, we fall back to the old signature.
-    try:
-        agent = TD3BCAgent(
-            state_dim, action_dim, max_action,
+    agent = TD3BCAgent(
+            state_dim, 
+            action_dim, 
+            max_action,
             device=device,
-            alpha=alpha
+            bc_coef=alpha,
+            lr=3e-4 
         )
-        print("[TD3-BC Offline] Created TD3BCAgent with explicit alpha.")
-    except TypeError:
-        agent = TD3BCAgent(
-            state_dim, action_dim, max_action,
-            device=device
-        )
-        print("[TD3-BC Offline] Created TD3BCAgent WITHOUT alpha argument "
-              "(using default inside the agent).")
 
     writer = SummaryWriter(log_dir)
 
@@ -211,9 +241,11 @@ def main():
     for t in range(max_updates):
         critic_loss, actor_loss = agent.train(buffer, batch_size)
 
-        # TensorBoard logging
-        if t % 100 == 0:
+        # FIX: Use (t + 1) to align with total_it counters (100, 200, etc.)
+        if (t + 1) % 100 == 0:
             writer.add_scalar("Offline/Critic_Loss", critic_loss, t)
+            
+            # Now this will successfully log, because at t=99, total_it=100 (Even)
             if actor_loss is not None:
                 writer.add_scalar("Offline/Actor_Loss", actor_loss, t)
 

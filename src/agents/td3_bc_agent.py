@@ -2,12 +2,16 @@ import torch
 import torch.nn.functional as F
 from .td3_agent import TD3Agent
 
+import torch
+import torch.nn.functional as F
+from .td3_agent import TD3Agent
+
 class TD3BCAgent(TD3Agent):
     def __init__(self, state_dim, action_dim, max_action,
                  device="cpu", lr=3e-4,
                  bc_coef=2.5, policy_delay=2):
         super().__init__(state_dim, action_dim, max_action, device=device, lr=lr)
-        self.bc_coef = bc_coef          # BC loss weights
+        self.bc_coef = bc_coef
         self.policy_delay = policy_delay
 
     def train(self, replay_buffer, batch_size=256, gamma=0.99, tau=0.005):
@@ -15,7 +19,7 @@ class TD3BCAgent(TD3Agent):
 
         state, action, reward, next_state, done = replay_buffer.sample(batch_size)
 
-        # ---------- Critic update ----------
+        # 1. Critic Update (Standard TD3)
         with torch.no_grad():
             noise = (torch.randn_like(action) * 0.2).clamp(-0.5, 0.5)
             next_action = (self.actor_target(next_state) + noise).clamp(-self.max_action, self.max_action)
@@ -33,24 +37,27 @@ class TD3BCAgent(TD3Agent):
 
         actor_loss = None
 
-        # ---------- Actor + Target net（Delayed update） ----------
+        # 2. Actor Update (TD3 + BC)
         if self.total_it % self.policy_delay == 0:
-            #TD3：maxmize Q(s, π(s))
             pi = self.actor(state)
-            q_pi, _ = self.critic(state, pi)
-            td3_actor_loss = -q_pi.mean()
+            q_pi, _ = self.critic(state, pi) # Use Q1 for optimization
 
-            # BC
+            # --- CORRECTION: Normalization ---
+            # Calculates: lambda / mean(|Q|)
+            # This balances the Q-gradient so it doesn't overpower the BC term
+            lmbda = self.bc_coef / q_pi.abs().mean().detach()
+
+            # Loss = - lmbda * Q  +  MSE(pi, expert_action)
+            td3_actor_loss = -lmbda * q_pi.mean()
             bc_loss = F.mse_loss(pi, action)
-
-            # TD3-BC：combine
-            actor_loss = td3_actor_loss + self.bc_coef * bc_loss
+            
+            actor_loss = td3_actor_loss + bc_loss
 
             self.actor_optim.zero_grad()
             actor_loss.backward()
             self.actor_optim.step()
 
-            # soft update target networks
+            # Target Networks Update
             for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
                 target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
 

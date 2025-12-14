@@ -5,11 +5,14 @@ import pickle
 import heapq
 import matplotlib.pyplot as plt
 
+from utils.pd_path_follower import PDPathFollower
+from envs.wrappers import NegativeRewardWrapper, WallHitPenaltyWrapper, SuccessBonusWrapper
+
 # --- CONFIGURATION ---
 ENV_ID = "PointMaze_Medium-v3"
 TOTAL_EPISODES = 1000        # Set this to how many episodes you want to record
 OUTPUT_FILE = "expert_data_hires.pkl"
-SHOW_VISUALIZATION = True # Set True to watch the agent live
+SHOW_VISUALIZATION = False # Set True to watch the agent live
 RESOLUTION_SCALE = 10     # High resolution for smooth paths
 
 #MANUAL_OFFSET_X = -0.5 # Try -1.2 first (shifts grid Center Left)
@@ -394,12 +397,17 @@ def main_test():
 def main():
     # Use rgb_array to capture frames for matplotlib
     env = gym.make(ENV_ID, render_mode="rgb_array", max_episode_steps=1000, reward_type='dense')
+    env = NegativeRewardWrapper(env)
+    env = WallHitPenaltyWrapper(env, penalty=0.5, act_thresh=0.5)
+    env = SuccessBonusWrapper(env, dist_threshold=-0.15, bonus=10.0)
     
     raw_map = np.array(env.unwrapped.maze.maze_map)
 
     original_shape = raw_map.shape
     hires_map = inflate_maze(raw_map, RESOLUTION_SCALE)
     safe_map = inflate_walls(hires_map, radius=3)
+
+    controller = PDPathFollower(original_shape, RESOLUTION_SCALE, kp=15.0, kd=4.0, lookahead=5)
     
     dataset = []
     success_count = 0
@@ -430,25 +438,11 @@ def main():
         if not path_nodes:
             print("Path planning failed. Retrying...")
             continue
+
+        controller.set_path(path_nodes, obs['desired_goal'])
             
         done = False
         current_path_idx = 3
-        
-        # 1. Find the closest node to our actual position
-        #start_world_pos = np.array(start_xy)
-        #closest_dist = float('inf')
-        #closest_idx = 0
-        
-        #for i, node in enumerate(path_nodes):
-        #    node_pos = np.array(grid_to_world(*node, original_shape))
-        #    dist = np.linalg.norm(start_world_pos - node_pos)
-        #    if dist < closest_dist:
-        #        closest_dist = dist
-        #        closest_idx = i
-                
-        # 2. Set our initial target to be at least 'lookahead' steps ahead of that closest point
-        # With Scale 10, lookahead=5 is about 0.5 meters, which is a good "Launch vector"
-        #current_path_idx = min(closest_idx + 1, len(path_nodes) - 1)
         episode_data = []
         step_count = 0
         
@@ -460,41 +454,18 @@ def main():
             current_pos = obs['observation'][:2]
             current_vel = obs['observation'][2:]
                 
-            
-            # --- CONTROL LOGIC ---
-            lookahead = 5
-            
-            if current_path_idx < len(path_nodes):
-                # Instead of aiming at 'current_path_idx', we aim ahead!
-                target_idx = min(current_path_idx + lookahead, len(path_nodes) - 1)
-                
-                target_node = path_nodes[target_idx]
-                target_world = np.array(grid_to_world(*target_node, original_shape))
-                
-                # Special Case: If we are nearing the end, aim exactly at the Goal
-                if current_path_idx >= len(path_nodes) - 3:
-                    target_world = goal_xy
-            else:
-                target_world = goal_xy
-
-            action = pd_controller(current_pos, target_world, current_vel)
-            #action = dwa_controller(current_pos, current_vel, target_world, safe_map, original_shape)
+            action = controller.get_action(current_pos, current_vel)
 
             if SHOW_VISUALIZATION:
-                current_node = world_to_grid(current_pos[0], current_pos[1], original_shape)
-                # Pass 'target_node' to the update function
-                update_plot(env, safe_map, start_node, goal_node, path_nodes, current_node, ax1, ax2, target_node)
+                update_plot(env, safe_map, start_node, goal_node, path_nodes, 
+                           world_to_grid(*current_pos, original_shape), ax1, ax2, 
+                           controller.current_target_node)
 
             next_obs, reward, terminated, truncated, _ = env.step(action)
 
             if reward >= 0.85:
                 terminated = True
-            
-            # --- PRINT INFO ---
-            # Print Action (Forces) and Reward
-            # Note: Reward in Sparse PointMaze is 0 (fail) or 1 (success).
-            # If using Dense, it's negative distance.
-            #print(f"Step: {step_count:03d} | Action: [{action[0]:.2f}, {action[1]:.2f}] | Reward: {reward:.4f}")
+        
             
             episode_data.append({
                 'obs': obs['observation'],
@@ -507,11 +478,6 @@ def main():
             
             obs = next_obs
             done = terminated or truncated
-            
-            # Waypoint Switching
-            dist_threshold = 0.4 / RESOLUTION_SCALE 
-            if np.linalg.norm(current_pos - target_world) < max(0.15, dist_threshold):
-                current_path_idx += 1
         
         if terminated:
             dataset.extend(episode_data)

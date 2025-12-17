@@ -7,23 +7,53 @@ Inside some conda env:
 pip install -e .
 ```
 
+## Pipeline for evaluating TD3 Random Initialization vs Warm Start Initialization
+```bash
+python src/scripts/generate_expert.py #set SHOW_VISUALIZATION = False
+python src/scripts/train_offline_td3_bc.py --config config/td3_bc.yaml
+# online TD3 without warm start
+python src/scripts/train_online.py --mode scratch --seed 0
+# online TD3 with warm start
+python src/scripts/train_online.py \
+  --mode warm_start \
+  --seed 0 \
+  --pretrained_path ./models/td3_bc_offline_step_300000 \
+  --dataset_path expert_data_hires.pkl \
+  --stats_path models/normalization_stats.pkl
+```
+
 ## Run Scripts
 ### Generate expert dataset
 ```bash
 python src/scripts/generate_expert.py
 ```
 
-### Train online TD3
-```bash
-python src/scripts/train_online.py
-```
-
 ### Train offline TD3-BC
-
 We first train a TD3-BC agent purely from the expert dataset:
 
 ```bash
 python src/scripts/train_offline_td3_bc.py --config config/td3_bc.yaml
+```
+
+### Train online TD3 (from scratch)
+```bash
+python src/scripts/train_online.py
+```
+
+### Train online TD3 (warm-start from offline TD3-BC)
+fine tune from the offline checkpoint (actor + critic)
+```bash
+python src/scripts/train_online_warm_start.py
+```
+
+### PPO
+install SB3
+```bash
+pip install "stable-baselines3[extra]"
+```
+then run the script
+```bash
+python src/scripts/train_ppo.py
 ```
 
 ### Visualize best agent
@@ -59,16 +89,6 @@ python src/scripts/train_offline_td3_bc.py --config config/td3_bc.yaml
    python src/scripts/visualize_agent.py --algo ppo --model_path ./models/ppo_best_2025-12-09-17-53-33_PPO_0_train.zip
    ``` 
 
-
-### PPO
-install SB3
-```bash
-pip install "stable-baselines3[extra]"
-```
-then run the script
-```bash
-python src/scripts/train_ppo.py
-```
 
 
 ## Note for our team

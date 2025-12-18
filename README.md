@@ -128,7 +128,7 @@ If you prefer, you can rerun the offline training to generate a true best-model 
 Pipeline:
 A* global & PD local control -> Crashing safety validation -> rollout -> only save the successful trajectory
 Data format (input as the offline RL)
-
+```bash
 {
   obs,          # 当前连续观测（pos + vel）
   goal,         # desired_goal
@@ -137,6 +137,7 @@ Data format (input as the offline RL)
   next_obs,     # 下一时刻观测
   done          # 是否成功终止
 }
+```
 
 #### How to get expert trajectory
 layer 1: discrete layer - A_star algorithm is responsible for where to go (global best)
@@ -264,10 +265,10 @@ When a deviation occurs (which is very common):
 ```bash
 Because:
 Question	                                        BC	TD3-BC
-Knows if it will hit a wall?	                    ❌   ✅
-Distinguishes between 'fast/slow' or 'good/bad'?	❌	  ✅
-Can optimize within the expert's range?	          ❌	  ✅
-Simply follows the expert blindly?	              ✅	  ❌
+Knows if it will hit a wall?	                    ❌    ✅
+Distinguishes between 'fast/slow' or 'good/bad'?	❌	   ✅
+Can optimize within the expert's range?	          ❌	   ✅
+Simply follows the expert blindly?	              ✅	   ❌
 ```
 
 In a nutshell: BC only knows "what was done," while TD3-BC knows "is doing this worth it?"
@@ -362,6 +363,7 @@ eval_env rollout
 eval only sees, no new data, don't update the network
 
 #### expert_data_hires.pkl
+```bash
 [
   {
     'obs': np.ndarray,        # 当前观测
@@ -376,6 +378,8 @@ eval only sees, no new data, don't update the network
   },
   ...
 ]
+```
+
 ```bash
 with open(path, "rb") as f:
     dataset = pickle.load(f)
@@ -387,6 +391,7 @@ normalize
 TD3-BC 以后只认 ReplayBuffer
 
 #### normalization_stats.pkl
+```bash
 {
   "mean": np.ndarray,
   "std": np.ndarray,
@@ -396,6 +401,8 @@ TD3-BC 以后只认 ReplayBuffer
 “你看到的世界，必须和 offline 时一样”
 
 它什么时候用？👉 online warm-start 时
+```
+
 
 ```bash
 python train_online.py \
@@ -425,4 +432,4 @@ offline：critic 最稳定 / loss 最低
 online：success rate 最高
 
 这是“推荐使用”的模型
-👉 90% 的情况下，你只用这个
+👉 90% 的情况下，只用这个
